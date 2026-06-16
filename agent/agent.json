@@ -4,11 +4,10 @@
   "version": "1.0.0",
   "owner": "0xa6a3bd6fb4623f61917abcd13b4c6fde3438ea77",
   "agentAddress": "0xa6a3bd6fb4623f61917abcd13b4c6fde3438ea77",
-  "vault": "0x1eAFcCCF24f3007E64F9cf78b5D4aaA8a8152Cbd",
+  "vault": "0xDEPLOYED_VAULT_ADDRESS",
   "chainId": 42220,
   "capabilities": ["yield-optimization", "stablecoin-payments"],
   "endpoints": {
-    "website": "https://celoneutral-agent.vercel.app"
+    "website": "https://your-deploy.vercel.app"
   }
 }
-

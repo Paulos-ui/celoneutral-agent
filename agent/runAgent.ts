@@ -1,65 +1,96 @@
 /**
- * runAgent.ts — minimal autonomous loop for the CeloNeutral agent.
+ * runAgent.ts — CeloNeutral autonomous AI agent.
  *
- * Responsibilities:
- *   1. Watch the vault's idle stablecoin balance.
- *   2. When idle balance exceeds a threshold, call supplyToAave() to earn yield.
- *   3. Process a queue of pending payments by calling executePayment().
+ * Each tick it:
+ *   1. Reads real vault state from Celo (idle balance + total deposits).
+ *   2. Asks the Groq-powered decision layer what to do (guardrailed in aiDecider).
+ *   3. Executes the resulting action on-chain via the vault.
  *
- * Run this anywhere that can hold the agent key: a small VPS, a cron job, or a
- * serverless scheduled function. It needs the AGENT private key (the address set
- * as `agent` on the vault) and a Celo RPC. Keep the key in env, never in code.
- *
- * This is an MVP scaffold. Harden before mainnet: gas limits, retries,
- * idempotency on payments, and an allowlist of payment recipients.
+ * Run server-side only (holds the agent key). Schedule with cron / systemd /
+ * a serverless timer. Secrets come from agent/.env — never commit them.
  */
 
-import { createWalletClient, createPublicClient, http, parseUnits } from "viem";
+import "dotenv/config";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  parseUnits,
+  formatUnits,
+  stringToHex,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { celo } from "viem/chains";
+import { decideAction, VaultState } from "./aiDecider";
 
 const RPC = process.env.CELO_RPC ?? "https://forno.celo.org";
 const VAULT = process.env.VAULT_ADDRESS as `0x${string}`;
+const STABLE = (process.env.STABLE_ADDRESS ??
+  "0x765DE816845861e75A25fCA122bb6898B8B1282a") as `0x${string}`; // cUSD
 const AGENT_KEY = process.env.AGENT_PRIVATE_KEY as `0x${string}`;
-const IDLE_THRESHOLD = parseUnits("100", 18); // supply once >100 cUSD is idle
+const DECIMALS = 18;
 
 const VAULT_ABI = [
+  { type: "function", name: "totalDeposits", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "supplyToAave", stateMutability: "nonpayable", inputs: [{ name: "amount", type: "uint256" }], outputs: [] },
   { type: "function", name: "executePayment", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }, { name: "ref", type: "bytes32" }], outputs: [] },
 ] as const;
 
-const account = privateKeyToAccount(AGENT_KEY);
+const ERC20_ABI = [
+  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
+] as const;
+
 const publicClient = createPublicClient({ chain: celo, transport: http(RPC) });
-const walletClient = createWalletClient({ account, chain: celo, transport: http(RPC) });
+
+/** Read the live vault state from Celo. */
+async function readState(): Promise<VaultState> {
+  const [idleRaw, depositsRaw] = await Promise.all([
+    publicClient.readContract({ address: STABLE, abi: ERC20_ABI, functionName: "balanceOf", args: [VAULT] }),
+    publicClient.readContract({ address: VAULT, abi: VAULT_ABI, functionName: "totalDeposits" }),
+  ]);
+  return {
+    idleBalance: Number(formatUnits(idleRaw as bigint, DECIMALS)),
+    totalDeposits: Number(formatUnits(depositsRaw as bigint, DECIMALS)),
+    pendingPayments: [], // wire to your invoice queue / DB
+  };
+}
 
 async function tick() {
-  // 1. Allocate idle funds to yield (threshold-gated to save gas).
-  //    A production agent would read the vault's idle balance on-chain first.
-  try {
-    await walletClient.writeContract({
-      address: VAULT,
-      abi: VAULT_ABI,
-      functionName: "supplyToAave",
-      args: [IDLE_THRESHOLD],
-    });
-    console.log("[agent] supplied idle funds to lending market");
-  } catch (e) {
-    console.log("[agent] supply skipped:", (e as Error).message);
-  }
+  const account = privateKeyToAccount(AGENT_KEY);
+  const walletClient = createWalletClient({ account, chain: celo, transport: http(RPC) });
 
-  // 2. Process the next queued payment (pull from your off-chain queue/DB).
-  //    Example placeholder — wire to your invoice source.
-  // await walletClient.writeContract({
-  //   address: VAULT, abi: VAULT_ABI, functionName: "executePayment",
-  //   args: [recipient, amount, ref],
-  // });
+  const state = await readState();
+  console.log("[agent] state:", state);
+
+  const decision = await decideAction(state);
+  console.log("[agent] decision:", decision);
+
+  if (decision.action === "supply") {
+    const hash = await walletClient.writeContract({
+      address: VAULT, abi: VAULT_ABI, functionName: "supplyToAave",
+      args: [parseUnits(String(decision.amount), DECIMALS)],
+    });
+    console.log("[agent] supply tx:", hash);
+  } else if (decision.action === "pay") {
+    const hash = await walletClient.writeContract({
+      address: VAULT, abi: VAULT_ABI, functionName: "executePayment",
+      args: [
+        decision.to as `0x${string}`,
+        parseUnits(String(decision.amount), DECIMALS),
+        stringToHex(decision.ref, { size: 32 }),
+      ],
+    });
+    console.log("[agent] payment tx:", hash);
+  } else {
+    console.log("[agent] holding:", decision.reason);
+  }
 }
 
 async function main() {
-  console.log("[agent] starting CeloNeutral agent on Celo mainnet");
-  console.log("[agent] address:", account.address);
+  console.log("[agent] CeloNeutral AI agent starting on Celo mainnet");
+  console.log("[agent] vault:", VAULT);
   await tick();
-  // For a long-running process: setInterval(tick, 60_000);
+  // For continuous operation: setInterval(() => tick().catch(console.error), 60_000);
 }
 
 main().catch(console.error);

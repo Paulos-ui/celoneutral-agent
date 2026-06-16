@@ -10,6 +10,7 @@ const links = [
   { href: "/", label: "Home" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/deposit", label: "Deposit" },
+  { href: "/agent", label: "AI Agent" },
 ];
 
 export default function Navbar() {
