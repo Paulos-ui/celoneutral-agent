@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+.env
+.env.local
+.DS_Store
+*.log
+contracts/node_modules
+contracts/artifacts
+contracts/cache
+contracts/typechain-types
+agent/node_modules
