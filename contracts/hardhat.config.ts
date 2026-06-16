@@ -13,10 +13,10 @@ const config: HardhatUserConfig = {
   networks: {
     // ── Celo MAINNET — real funds ──
     celo: {
-      url: "https://forno.celo.org",
-      chainId: 42220,
-      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
-    },
+  url: "https://celo.drpc.org",   // was https://forno.celo.org
+  chainId: 42220,
+  accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
+},
     // ── Alfajores TESTNET — dry-run here first ──
     alfajores: {
       url: "https://alfajores-forno.celo-testnet.org",
